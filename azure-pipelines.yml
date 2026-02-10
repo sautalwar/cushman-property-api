@@ -1,0 +1,14 @@
+trigger:
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+  - task: AdvancedSecurity-Codeql-Init@1
+    inputs:
+      languages: 'javascript'
+
+  - task: AdvancedSecurity-Codeql-Analyze@1
+
+  - task: AdvancedSecurity-Dependency-Scanning@1
