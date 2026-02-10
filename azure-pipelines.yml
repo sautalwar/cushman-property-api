@@ -10,5 +10,3 @@ steps:
       languages: 'javascript'
 
   - task: AdvancedSecurity-Codeql-Analyze@1
-
-  - task: AdvancedSecurity-Dependency-Scanning@1
