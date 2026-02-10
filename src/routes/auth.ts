@@ -1,20 +1,8 @@
 import { Router, Request, Response } from 'express';
-import rateLimit from 'express-rate-limit';
 import { UserService } from '../services/UserService';
 
 export const authRouter = Router();
 const userService = new UserService();
-
-// Stricter rate limiter for auth endpoints — 100 requests per 15 minutes per IP
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many authentication attempts, please try again later.' },
-});
-
-authRouter.use(authLimiter);
 
 // POST /api/auth/login
 authRouter.post('/login', async (req: Request, res: Response) => {

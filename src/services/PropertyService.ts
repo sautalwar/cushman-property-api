@@ -3,17 +3,18 @@ import { Property, CreatePropertyDto } from '../models/Property';
 
 export class PropertyService {
 
-  // FIXED: Using parameterized queries to prevent SQL injection
+  // ⚠️ VULNERABLE: SQL Injection — string concatenation in query
+  // This is intentionally insecure for the CodeQL/Copilot Autofix demo
   async searchProperties(searchTerm: string): Promise<Property[]> {
-    const sql = 'SELECT * FROM properties WHERE name LIKE $1 OR address LIKE $1';
-    const result = await query(sql, [`%${searchTerm}%`]);
+    const sql = `SELECT * FROM properties WHERE name LIKE '%${searchTerm}%' OR address LIKE '%${searchTerm}%'`;
+    const result = await query(sql);
     return result.rows;
   }
 
-  // FIXED: Using parameterized queries to prevent SQL injection
+  // ⚠️ VULNERABLE: SQL Injection — string interpolation
   async getPropertyById(id: string): Promise<Property | null> {
-    const sql = 'SELECT * FROM properties WHERE id = $1';
-    const result = await query(sql, [id]);
+    const sql = `SELECT * FROM properties WHERE id = '${id}'`;
+    const result = await query(sql);
     return result.rows[0] || null;
   }
 
@@ -40,10 +41,10 @@ export class PropertyService {
     return result.rows[0];
   }
 
-  // FIXED: Using parameterized queries to prevent SQL injection
+  // ⚠️ VULNERABLE: SQL Injection in UPDATE
   async updateOccupancy(propertyId: string, rate: string): Promise<void> {
-    const sql = 'UPDATE properties SET occupancy_rate = $1 WHERE id = $2';
-    await query(sql, [rate, propertyId]);
+    const sql = `UPDATE properties SET occupancy_rate = ${rate} WHERE id = '${propertyId}'`;
+    await query(sql);
   }
 
   // SAFE: Parameterized delete
