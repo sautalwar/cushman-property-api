@@ -1,0 +1,40 @@
+name: "VULN-7: CORS Misconfiguration Check"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+env:
+  API_URL: ${{ vars.API_URL }}
+
+jobs:
+  check-cors:
+    name: "Check CORS Wildcard with Credentials"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send OPTIONS preflight from evil origin
+        id: cors_test
+        run: |
+          API=${API_URL:-http://localhost:3001}
+          RESPONSE_HEADERS=$(curl -s -I -X OPTIONS "$API/api/properties" \
+            -H "Origin: https://evil-site.com" \
+            -H "Access-Control-Request-Method: GET" \
+            -H "Access-Control-Request-Headers: Authorization")
+          echo "$RESPONSE_HEADERS"
+          ACAO=$(echo "$RESPONSE_HEADERS" | grep -i "access-control-allow-origin" | tr -d '\r' || echo "")
+          echo "acao=$ACAO" >> $GITHUB_OUTPUT
+
+      - name: Evaluate result
+        run: |
+          ACAO="${{ steps.cors_test.outputs.acao }}"
+          echo "ACAO: $ACAO"
+          if echo "$ACAO" | grep -qi "\*"; then
+            echo "::error::VULN-7 CONFIRMED: CORS Misconfiguration! Server sends Access-Control-Allow-Origin: *. Fix: restrict to specific allowed domains"
+            echo "## VULN-7 CORS Misconfiguration Detected" >> $GITHUB_STEP_SUMMARY
+            echo "**Fix:** Replace origin: '*' with explicit allowlist in cors() config." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "CORS check passed"
+            echo "## CORS Check Passed" >> $GITHUB_STEP_SUMMARY
+          fi

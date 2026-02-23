@@ -1,0 +1,58 @@
+name: "VULN-6: Rate Limit Abuse Check"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+env:
+  API_URL: ${{ vars.API_URL }}
+
+jobs:
+  check-rate-limit:
+    name: "Check Missing Per-User Rate Limiting on Bids"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login as Charlie (contractor)
+        id: login
+        run: |
+          API=${API_URL:-http://localhost:3001}
+          RESPONSE=$(curl -s -X POST "$API/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -d '{"email":"charlie@contractor.com","password":"Password123!"}')
+          TOKEN=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['token'])")
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Submit 50 bids rapidly
+        id: rate_test
+        run: |
+          API=${API_URL:-http://localhost:3001}
+          JOB_ID="cccccccc-0000-0000-0000-000000000001"
+          TOKEN="${{ steps.login.outputs.token }}"
+          RATE_LIMITED=0
+          for i in $(seq 1 50); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X POST "$API/api/jobs/$JOB_ID/bids" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $TOKEN" \
+              -d "{\"amount\": $((100 + i))}")
+            if [ "$STATUS" = "429" ]; then
+              RATE_LIMITED=1
+              echo "Rate limited at iteration $i"
+              break
+            fi
+          done
+          echo "rate_limited=$RATE_LIMITED" >> $GITHUB_OUTPUT
+
+      - name: Evaluate result
+        run: |
+          RL="${{ steps.rate_test.outputs.rate_limited }}"
+          if [ "$RL" = "0" ]; then
+            echo "::error::VULN-6 CONFIRMED: Rate Limit Abuse! 50 bids submitted without any 429. Fix: add per-user rate limiter to POST /api/jobs/:id/bids"
+            echo "## VULN-6 Rate Limit Abuse Detected" >> $GITHUB_STEP_SUMMARY
+            echo "**Fix:** Add express-rate-limit with keyGenerator based on userId." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "Rate limit check passed"
+            echo "## Rate Limit Check Passed" >> $GITHUB_STEP_SUMMARY
+          fi

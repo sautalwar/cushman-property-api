@@ -1,0 +1,49 @@
+﻿name: "🔴 VULN-2: Broken Authentication Check"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+env:
+  API_URL: ${{ vars.API_URL || 'http://localhost:3001' }}
+
+jobs:
+  check-broken-auth:
+    name: "Check Expired Token Acceptance"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate an expired JWT
+        id: gen_token
+        run: |
+          # Create a JWT that expired 1 hour ago
+          HEADER=$(echo -n '{"alg":"HS256","typ":"JWT"}' | base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
+          NOW=$(date +%s)
+          EXP=$((NOW - 3600))
+          PAYLOAD=$(echo -n "{\"userId\":\"11111111-0000-0000-0000-000000000001\",\"role\":\"admin\",\"iat\":$((NOW-7200)),\"exp\":$EXP}" | base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
+          SIG="invalid-sig-for-demo"
+          EXPIRED_TOKEN="$HEADER.$PAYLOAD.$SIG"
+          echo "token=$EXPIRED_TOKEN" >> $GITHUB_OUTPUT
+          echo "Token exp: $EXP ($(date -d @$EXP))"
+
+      - name: Send request with expired token
+        id: auth_test
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ steps.gen_token.outputs.token }}" \
+            "$API_URL/api/jobs")
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "HTTP Status with expired token: $STATUS"
+
+      - name: Evaluate result
+        run: |
+          STATUS="${{ steps.auth_test.outputs.status }}"
+          if [ "$STATUS" = "200" ]; then
+            echo "::error::VULN-2 CONFIRMED: Broken Authentication! Server accepted an expired JWT and returned HTTP 200. Fix: remove ignoreExpiration: true from jwt.verify()"
+            echo "## 🔴 Broken Authentication Detected" >> $GITHUB_STEP_SUMMARY
+            echo "Server accepted an expired JWT token (HTTP $STATUS)." >> $GITHUB_STEP_SUMMARY
+            echo "**Fix:** Remove \`ignoreExpiration: true\` from \`jwt.verify()\` in auth middleware." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "✅ Auth check passed — expired token rejected with $STATUS"
+          fi

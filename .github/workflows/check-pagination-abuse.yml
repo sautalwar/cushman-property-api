@@ -1,0 +1,48 @@
+name: "VULN-5: Pagination Abuse Check"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+env:
+  API_URL: ${{ vars.API_URL }}
+
+jobs:
+  check-pagination-abuse:
+    name: "Check Unbounded Pagination Limit"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login as Alice
+        id: login
+        run: |
+          API=${API_URL:-http://localhost:3001}
+          RESPONSE=$(curl -s -X POST "$API/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -d '{"email":"alice@propowner.com","password":"Password123!"}')
+          TOKEN=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['token'])")
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Request with limit=99999
+        id: pagination_test
+        run: |
+          API=${API_URL:-http://localhost:3001}
+          RESPONSE=$(curl -s \
+            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+            "$API/api/properties?limit=99999&page=1")
+          COUNT=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('count', len(d.get('data',[]))))" 2>/dev/null || echo "0")
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Records returned: $COUNT"
+
+      - name: Evaluate result
+        run: |
+          COUNT="${{ steps.pagination_test.outputs.count }}"
+          if [ "$COUNT" -gt 100 ] 2>/dev/null; then
+            echo "::error::VULN-5 CONFIRMED: Pagination Abuse! Server returned $COUNT records for limit=99999. Fix: enforce MAX_PAGE_SIZE=100"
+            echo "## VULN-5 Pagination Abuse Detected" >> $GITHUB_STEP_SUMMARY
+            echo "**Fix:** Add \`const safeLimit = Math.min(parseInt(req.query.limit) || 20, 100);\`" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "Pagination check passed - $COUNT records returned (limit enforced)"
+            echo "## Pagination Check Passed" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -1,0 +1,56 @@
+name: "VULN-8: SQL Injection Check"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+env:
+  API_URL: ${{ vars.API_URL }}
+
+jobs:
+  check-sql-injection:
+    name: "Check SQL Injection in Search Endpoint"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login as Alice
+        id: login
+        run: |
+          API=${API_URL:-http://localhost:3001}
+          RESPONSE=$(curl -s -X POST "$API/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -d '{"email":"alice@propowner.com","password":"Password123!"}')
+          TOKEN=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['token'])")
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Get baseline count
+        id: baseline
+        run: |
+          API=${API_URL:-http://localhost:3001}
+          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ steps.login.outputs.token }}" "$API/api/properties/search?q=downtown")
+          COUNT=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('data',[])))" 2>/dev/null || echo "0")
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+
+      - name: Test SQL injection payload
+        id: sqli_test
+        run: |
+          API=${API_URL:-http://localhost:3001}
+          ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote(\"' OR 1=1 --\"))")
+          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ steps.login.outputs.token }}" "$API/api/properties/search?q=$ENCODED")
+          COUNT=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('data',[])))" 2>/dev/null || echo "0")
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "SQL injection result: $COUNT records"
+
+      - name: Evaluate result
+        run: |
+          BASELINE="${{ steps.baseline.outputs.count }}"
+          INJECTED="${{ steps.sqli_test.outputs.count }}"
+          if [ "$INJECTED" -gt "$BASELINE" ] 2>/dev/null && [ "$INJECTED" -gt 3 ] 2>/dev/null; then
+            echo "::error::VULN-8 CONFIRMED: SQL Injection! Normal search=$BASELINE records, injection returned $INJECTED. Fix: use parameterized queries"
+            echo "## VULN-8 SQL Injection Detected" >> $GITHUB_STEP_SUMMARY
+            echo "**Fix:** Use parameterized query: WHERE name ILIKE \$1 with [\`%\${q}%\`]." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "SQL injection check passed"
+            echo "## SQL Injection Check Passed" >> $GITHUB_STEP_SUMMARY
+          fi

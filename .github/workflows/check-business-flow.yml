@@ -1,0 +1,49 @@
+name: "VULN-9: Sensitive Business Flow Check"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+env:
+  API_URL: ${{ vars.API_URL }}
+
+jobs:
+  check-business-flow:
+    name: "Check Non-Assigned Contractor Can Complete Job"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login as Charlie (NOT the assigned contractor for job 2)
+        id: login
+        run: |
+          API=${API_URL:-http://localhost:3001}
+          RESPONSE=$(curl -s -X POST "$API/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -d '{"email":"charlie@contractor.com","password":"Password123!"}')
+          TOKEN=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['token'])")
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Attempt to complete Job 2 (assigned to Diana, not Charlie)
+        id: flow_test
+        run: |
+          API=${API_URL:-http://localhost:3001}
+          JOB_ID="cccccccc-0000-0000-0000-000000000002"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "$API/api/jobs/$JOB_ID/complete" \
+            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+            -H "Content-Type: application/json")
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "HTTP Status: $STATUS"
+
+      - name: Evaluate result
+        run: |
+          STATUS="${{ steps.flow_test.outputs.status }}"
+          if [ "$STATUS" = "200" ]; then
+            echo "::error::VULN-9 CONFIRMED: Sensitive Business Flow! Non-assigned contractor completed a job (HTTP 200). Fix: verify assignedContractorId === requesting userId"
+            echo "## VULN-9 Business Flow Vulnerability Detected" >> $GITHUB_STEP_SUMMARY
+            echo "**Fix:** In JobService.completeJob(), check job.assignedContractorId === userId and throw 403 if mismatch." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "Business flow check passed - HTTP $STATUS"
+            echo "## Business Flow Check Passed" >> $GITHUB_STEP_SUMMARY
+          fi
