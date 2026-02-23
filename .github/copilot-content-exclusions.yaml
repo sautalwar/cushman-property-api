@@ -1,0 +1,23 @@
+# Copilot Content Exclusions
+# These files and paths are NEVER sent to the AI model
+# Configure at: Organization Settings > Copilot > Content Exclusions
+
+# Environment and secrets
+"*":
+  - "**/.env"
+  - "**/.env.*"
+  - "**/secrets/**"
+  - "**/*.pem"
+  - "**/*.key"
+  - "**/*.p12"
+  - "**/*.pfx"
+
+# Compliance-sensitive directories
+  - "**/compliance/**"
+  - "**/legal/**"
+  - "**/internal-docs/**"
+
+# Infrastructure credentials
+  - "**/terraform.tfvars"
+  - "**/*.auto.tfvars"
+  - "**/kubeconfig*"
