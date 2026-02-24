@@ -1,5 +1,5 @@
 import { query } from '../config/database';
-import { Property, CreatePropertyDto } from '../models/Property';
+import { Property, CreatePropertyDto, NearbyPropertyResult } from '../models/Property';
 
 export class PropertyService {
 
@@ -45,6 +45,29 @@ export class PropertyService {
   async updateOccupancy(propertyId: string, rate: string): Promise<void> {
     const sql = `UPDATE properties SET occupancy_rate = ${rate} WHERE id = '${propertyId}'`;
     await query(sql);
+  }
+
+  // SAFE: Find properties within radius using PostGIS
+  async findNearby(lat: number, lng: number, radiusMiles: number): Promise<NearbyPropertyResult[]> {
+    const sql = `
+      SELECT *,
+        ST_Distance(
+          ST_MakePoint(longitude, latitude)::geography,
+          ST_MakePoint($1, $2)::geography
+        ) / 1609.344 AS distance_miles
+      FROM properties
+      WHERE ST_DWithin(
+        ST_MakePoint(longitude, latitude)::geography,
+        ST_MakePoint($1, $2)::geography,
+        $3 * 1609.344
+      )
+      ORDER BY distance_miles ASC
+    `;
+    const result = await query(sql, [lng, lat, radiusMiles]);
+    return result.rows.map((row: any) => ({
+      ...row,
+      distanceMiles: parseFloat(row.distance_miles),
+    }));
   }
 
   // SAFE: Parameterized delete

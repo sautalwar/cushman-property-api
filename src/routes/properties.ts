@@ -29,6 +29,33 @@ propertyRouter.get('/search', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/properties/nearby?lat=&lng=&radius= — find properties near coordinates
+propertyRouter.get('/nearby', async (req: Request, res: Response) => {
+  try {
+    const lat = parseFloat(req.query.lat as string);
+    const lng = parseFloat(req.query.lng as string);
+    const radius = parseFloat(req.query.radius as string);
+
+    if (isNaN(lat) || isNaN(lng) || isNaN(radius)) {
+      return res.status(400).json({ error: 'lat, lng, and radius are required and must be numbers' });
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return res.status(400).json({ error: 'Invalid coordinates' });
+    }
+    if (radius <= 0) {
+      return res.status(400).json({ error: 'radius must be a positive number' });
+    }
+    if (radius > 500) {
+      return res.status(400).json({ error: 'radius must not exceed 500 miles' });
+    }
+
+    const properties = await propertyService.findNearby(lat, lng, radius);
+    res.json({ data: properties, count: properties.length });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to retrieve nearby properties' });
+  }
+});
+
 // GET /api/properties/:id — get a single property
 propertyRouter.get('/:id', async (req: Request, res: Response) => {
   try {
