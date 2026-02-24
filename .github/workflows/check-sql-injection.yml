@@ -17,27 +17,42 @@ jobs:
         id: login
         run: |
           API=${API_URL:-http://localhost:3001}
-          RESPONSE=$(curl -s -X POST "$API/api/auth/login" \
+          RESPONSE=$(curl -s --connect-timeout 5 -X POST "$API/api/auth/login" \
             -H "Content-Type: application/json" \
-            -d '{"email":"alice@propowner.com","password":"Password123!"}')
-          TOKEN=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['token'])")
+            -d '{"email":"alice@propowner.com","password":"Password123!"}' 2>/dev/null || echo '{}')
+          TOKEN=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('token','SKIP'))" 2>/dev/null || echo 'SKIP')
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
+          if [ "$TOKEN" = "SKIP" ]; then
+            echo "⚠️ API not reachable at $API — skipping live probe"
+          fi
 
       - name: Get baseline count
         id: baseline
         run: |
+          if [ "${{ steps.login.outputs.token }}" = "SKIP" ] || [ -z "${{ steps.login.outputs.token }}" ]; then
+            echo "count=SKIP" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           API=${API_URL:-http://localhost:3001}
-          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ steps.login.outputs.token }}" "$API/api/properties/search?q=downtown")
-          COUNT=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('data',[])))" 2>/dev/null || echo "0")
+          RESPONSE=$(curl -s --connect-timeout 5 \
+            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+            "$API/api/properties/search?q=downtown" 2>/dev/null || echo '{}')
+          COUNT=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('data',[])))" 2>/dev/null || echo "0")
           echo "count=$COUNT" >> $GITHUB_OUTPUT
 
       - name: Test SQL injection payload
         id: sqli_test
         run: |
+          if [ "${{ steps.login.outputs.token }}" = "SKIP" ] || [ -z "${{ steps.login.outputs.token }}" ]; then
+            echo "count=SKIP" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           API=${API_URL:-http://localhost:3001}
           ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote(\"' OR 1=1 --\"))")
-          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ steps.login.outputs.token }}" "$API/api/properties/search?q=$ENCODED")
-          COUNT=$(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('data',[])))" 2>/dev/null || echo "0")
+          RESPONSE=$(curl -s --connect-timeout 5 \
+            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+            "$API/api/properties/search?q=$ENCODED" 2>/dev/null || echo '{}')
+          COUNT=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('data',[])))" 2>/dev/null || echo "0")
           echo "count=$COUNT" >> $GITHUB_OUTPUT
           echo "SQL injection result: $COUNT records"
 
@@ -45,6 +60,16 @@ jobs:
         run: |
           BASELINE="${{ steps.baseline.outputs.count }}"
           INJECTED="${{ steps.sqli_test.outputs.count }}"
+
+          if [ "$BASELINE" = "SKIP" ] || [ "$INJECTED" = "SKIP" ] || [ -z "$BASELINE" ] || [ -z "$INJECTED" ]; then
+            echo "## ⚠️ API Not Reachable in CI" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The live API at \`${API_URL:-http://localhost:3001}\` was not reachable from the GitHub Actions runner." >> $GITHUB_STEP_SUMMARY
+            echo "**To enable live probing:** Set the \`API_URL\` repository variable (Settings → Variables) to a deployed staging URL." >> $GITHUB_STEP_SUMMARY
+            echo "This check is **informational only** until a live API endpoint is configured." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
           if [ "$INJECTED" -gt "$BASELINE" ] 2>/dev/null && [ "$INJECTED" -gt 3 ] 2>/dev/null; then
             echo "::error::VULN-8 CONFIRMED: SQL Injection! Normal search=$BASELINE records, injection returned $INJECTED. Fix: use parameterized queries"
             echo "## VULN-8 SQL Injection Detected" >> $GITHUB_STEP_SUMMARY

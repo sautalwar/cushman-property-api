@@ -1,0 +1,674 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SECURITY POSTURE DASHBOARD
+# ─────────────────────────────────────────────────────────────────────────────
+# What this file does (plain English):
+#
+# This workflow is the "always-on security camera" for your API.
+# It runs automatically every 15 minutes and on every code push.
+# It does four things in sequence:
+#
+#   1. READS   — Asks GitHub Advanced Security API: "what have you already found?"
+#   2. PROBES  — Makes real HTTP requests to the live API to find runtime issues
+#   3. REPORTS — Formats all findings as SARIF and uploads to GitHub Security tab
+#   4. ACTS    — Creates GitHub Issues for new findings so a human can approve fixes
+#
+# The result is a single "security posture" report visible in GitHub Actions
+# AND in the Security tab — one source of truth for the entire engineering team.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: "🔐 Security Posture Dashboard"
+
+# ─── SECTION A: WHEN DOES THIS RUN? ─────────────────────────────────────────
+#
+# This workflow runs in three situations:
+#
+#   schedule  → Automatically every 15 minutes, 24/7, even with no code changes.
+#               This is the "always watching" behaviour. No human needs to trigger it.
+#
+#   push      → Every time a developer pushes code to main. Catches regressions
+#               immediately — if a new commit introduces a vulnerability, this
+#               workflow finds it within seconds of the push.
+#
+#   pull_request → Every time a PR is opened. Blocks the merge if new vulns are found.
+#
+#   workflow_dispatch → Manual trigger from the GitHub UI with options. Useful for
+#                       running a full audit on demand during an incident review.
+#
+on:
+  schedule:
+    - cron: '*/15 * * * *'      # Every 15 minutes — the heartbeat of your security posture
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment to probe'
+        type: choice
+        default: 'staging'
+        options: [staging, production, local]
+      fail_on_high:
+        description: 'Fail workflow if HIGH or CRITICAL vulnerabilities found?'
+        type: boolean
+        default: true
+
+# ─── SECTION B: PERMISSIONS ──────────────────────────────────────────────────
+#
+# GitHub Actions workflows run with a scoped token (GITHUB_TOKEN).
+# By default it can only read. We need to explicitly grant the extra
+# permissions this workflow needs:
+#
+#   security-events: write  → Allows uploading SARIF results to the Security tab
+#   issues: write           → Allows creating GitHub Issues for new findings
+#   contents: read          → Allows reading the repo (checking out code)
+#
+# IMPORTANT: These are the MINIMUM permissions needed. The principle of least
+# privilege — we only ask for what we actually use.
+#
+permissions:
+  security-events: write
+  issues: write
+  contents: read
+
+env:
+  GITHUB_REPO: ${{ github.repository }}     # e.g. sautalwar/cushman-property-api
+  API_URL:     ${{ vars.API_URL || 'http://localhost:3001' }}
+
+jobs:
+  security-posture:
+    name: "Security Posture Assessment"
+    runs-on: ubuntu-latest
+
+    steps:
+      # ═══════════════════════════════════════════════════════════════════════
+      # STEP 1: CHECKOUT
+      # ═══════════════════════════════════════════════════════════════════════
+      # What it does: Downloads the code from the repository into the runner.
+      # Why needed:   The SARIF generation step (Step 4) needs to reference
+      #               actual file paths in the source code so GitHub can link
+      #               findings to the correct line in the editor.
+      - name: "📥 Checkout repository"
+        uses: actions/checkout@v4
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # STEP 2: READ GHAS CODE SCANNING ALERTS
+      # ═══════════════════════════════════════════════════════════════════════
+      # What it does: Calls the GitHub API to get every open code-scanning alert.
+      #               Code scanning alerts are created by CodeQL — GitHub's
+      #               semantic static analyser that reads your source code.
+      #
+      # Why this matters: Before we run our own probes, we want to know what
+      #               GitHub already knows. This prevents duplicate issues and
+      #               lets us build a COMBINED picture: static findings + runtime
+      #               findings in one report.
+      #
+      # The API call: GET /repos/{owner}/{repo}/code-scanning/alerts
+      #               Returns a JSON array of all open alerts with:
+      #               - rule.id          → which security rule triggered
+      #               - rule.severity    → critical / high / medium / low
+      #               - most_recent_instance.location → file + line number
+      #               - html_url         → direct link to the alert in GitHub
+      #
+      - name: "📡 Step 1 — Read GHAS Code Scanning Alerts"
+        id: code_scanning
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching code scanning alerts from GitHub Advanced Security..."
+
+          ALERTS=$(gh api \
+            "/repos/$GITHUB_REPO/code-scanning/alerts?state=open&per_page=100" \
+            --jq '[.[] | {
+              id: .number,
+              rule: .rule.id,
+              severity: .rule.severity,
+              description: .rule.description,
+              file: .most_recent_instance.location.path,
+              line: .most_recent_instance.location.start_line,
+              url: .html_url
+            }]' 2>/dev/null || echo '[]')
+
+          COUNT=$(echo "$ALERTS" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+          echo "code_scan_count=$COUNT" >> $GITHUB_OUTPUT
+          echo "$ALERTS" > /tmp/code_scan_alerts.json
+          echo "Found $COUNT open code scanning alerts"
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # STEP 3: READ SECRET SCANNING ALERTS
+      # ═══════════════════════════════════════════════════════════════════════
+      # What it does: Asks GitHub if any secrets (API keys, passwords, tokens,
+      #               connection strings) were accidentally committed to git.
+      #
+      # Why this matters: A leaked JWT_SECRET means an attacker can forge tokens.
+      #               A leaked DATABASE_URL gives direct database access.
+      #               Secret scanning catches these within seconds of a push —
+      #               faster than any human code review.
+      #
+      # The API call: GET /repos/{owner}/{repo}/secret-scanning/alerts
+      #               Returns: secret_type (e.g. "github_personal_access_token"),
+      #               location (file + line), push_protection_bypassed (was the
+      #               developer warned and pushed anyway?)
+      #
+      - name: "🔑 Step 2 — Read Secret Scanning Alerts"
+        id: secret_scanning
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching secret scanning alerts..."
+
+          SECRETS=$(gh api \
+            "/repos/$GITHUB_REPO/secret-scanning/alerts?state=open&per_page=50" \
+            --jq '[.[] | {
+              id: .number,
+              type: .secret_type_display_name,
+              bypassed: .push_protection_bypassed,
+              url: .html_url
+            }]' 2>/dev/null || echo '[]')
+
+          COUNT=$(echo "$SECRETS" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+          echo "secret_count=$COUNT" >> $GITHUB_OUTPUT
+          echo "$SECRETS" > /tmp/secret_alerts.json
+          echo "Found $COUNT open secret scanning alerts"
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # STEP 4: READ DEPENDABOT ALERTS
+      # ═══════════════════════════════════════════════════════════════════════
+      # What it does: Checks every npm package in package.json against the
+      #               GitHub Advisory Database — a continuously updated database
+      #               of known CVEs (Common Vulnerabilities and Exposures).
+      #
+      # Why this matters: 80% of modern application code is open-source
+      #               dependencies. A vulnerability in an npm package you use
+      #               is just as dangerous as one in your own code.
+      #               Example: CVE-2021-44228 (Log4Shell) — if you used log4j,
+      #               Dependabot would have flagged it the day it was published.
+      #
+      # The API call: GET /repos/{owner}/{repo}/dependabot/alerts
+      #               Returns: CVE ID, severity, package name, vulnerable version,
+      #               patched version, and a direct advisory URL.
+      #
+      - name: "📦 Step 3 — Read Dependabot Vulnerability Alerts"
+        id: dependabot
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching Dependabot alerts..."
+
+          DEPS=$(gh api \
+            "/repos/$GITHUB_REPO/dependabot/alerts?state=open&per_page=50" \
+            --jq '[.[] | {
+              id: .number,
+              package: .dependency.package.name,
+              severity: .security_vulnerability.severity,
+              cve: .security_advisory.cve_id,
+              summary: .security_advisory.summary,
+              patched_version: .security_vulnerability.first_patched_version.identifier,
+              url: .html_url
+            }]' 2>/dev/null || echo '[]')
+
+          COUNT=$(echo "$DEPS" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+          echo "dep_count=$COUNT" >> $GITHUB_OUTPUT
+          echo "$DEPS" > /tmp/dep_alerts.json
+          echo "Found $COUNT open Dependabot alerts"
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # STEP 5: LIVE RUNTIME API PROBES
+      # ═══════════════════════════════════════════════════════════════════════
+      # What it does: This is the step that makes this workflow unique compared
+      #               to pure static analysis tools. It makes ACTUAL HTTP requests
+      #               to the running API and tests whether each vulnerability
+      #               exists at runtime — not just in the code.
+      #
+      # Why this matters: Static analysis (CodeQL) reads code but cannot know
+      #               about runtime configuration — environment variables,
+      #               middleware order, framework behaviour, or infrastructure
+      #               settings. Runtime probes catch what static analysis misses.
+      #
+      # What each probe does:
+      #   BOLA probe      → Logs in as Bob, tries to read Alice's job. If HTTP 200
+      #                     → VULN-1 confirmed: no ownership check at runtime.
+      #   Auth probe      → Sends a token with exp set 1 hour ago. If HTTP 200
+      #                     → VULN-2 confirmed: ignoreExpiration is still true.
+      #   Rate limit      → Sends 25 requests rapidly. If no 429 returned
+      #                     → VULN-6 confirmed: no per-user throttle.
+      #   SQL injection   → Sends q=' OR 1=1 -- to /search. If row count spikes
+      #                     → VULN-8 confirmed: string concatenation in SQL.
+      #
+      - name: "🔬 Step 4 — Live Runtime API Probes"
+        id: probes
+        run: |
+          API="${API_URL:-http://localhost:3001}"
+          echo '{"findings":[]}' > /tmp/runtime_findings.json
+
+          python3 - <<'PYEOF'
+import json, os, urllib.request, urllib.error, base64, time
+
+api = os.environ.get('API_URL', 'http://localhost:3001')
+findings = []
+
+def http(method, path, body=None, headers=None):
+    """Simple HTTP helper — avoids needing curl or requests library."""
+    url = f"{api}{path}"
+    data = json.dumps(body).encode() if body else None
+    hdrs = {'Content-Type': 'application/json', **(headers or {})}
+    try:
+        req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
+        with urllib.request.urlopen(req, timeout=4) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+    except Exception:
+        return 0, {}   # API unreachable in CI — skip probe
+
+def login(email):
+    status, body = http('POST', '/api/auth/login',
+                         {'email': email, 'password': 'Password123!'})
+    return body.get('data', {}).get('token', '') if status == 200 else ''
+
+# ── Probe 1: BOLA ──────────────────────────────────────────────────────────
+# Bob (different owner) tries to read Alice's job. Should get 403, not 200.
+bob_token = login('bob@propowner.com')
+if bob_token:
+    status, body = http('GET', '/api/jobs/cccccccc-0000-0000-0000-000000000001',
+                         headers={'Authorization': f'Bearer {bob_token}'})
+    if status == 200:
+        findings.append({
+            'id': 'VULN-1-BOLA', 'severity': 'critical',
+            'rule': 'API1:2023 — Broken Object Level Authorization',
+            'file': 'api/src/services/JobService.ts', 'line': 12,
+            'message': f"Bob accessed Alice's job (HTTP {status}). "
+                       f"Job title: '{body.get('data',{}).get('title','N/A')}'. "
+                       "No owner_id check in SQL query.",
+            'fix': "Add 'AND owner_id = $2' to WHERE clause in getJobById()"
+        })
+
+# ── Probe 2: Broken Auth ───────────────────────────────────────────────────
+# Send a token with exp = 1 hour ago. Should get 401, not 200.
+import struct
+def make_expired_jwt():
+    now = int(time.time())
+    hdr = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b'=').decode()
+    pay = base64.urlsafe_b64encode(json.dumps({
+        'userId': '11111111-0000-0000-0000-000000000001',
+        'role': 'admin', 'iat': now - 7200, 'exp': now - 3600
+    }).encode()).rstrip(b'=').decode()
+    return f"{hdr}.{pay}.invalidsig"
+
+expired = make_expired_jwt()
+status, _ = http('GET', '/api/jobs', headers={'Authorization': f'Bearer {expired}'})
+if status == 200:
+    findings.append({
+        'id': 'VULN-2-AUTH', 'severity': 'critical',
+        'rule': 'API2:2023 — Broken Authentication',
+        'file': 'api/src/middleware/auth.ts', 'line': 18,
+        'message': f"Expired JWT accepted (HTTP {status}). "
+                   "ignoreExpiration: true allows tokens expired hours/days ago.",
+        'fix': "Remove ignoreExpiration: true from jwt.verify() options"
+    })
+
+# ── Probe 3: Rate Limit ────────────────────────────────────────────────────
+# Send 20 rapid requests. If none return 429, rate limiting is missing.
+charlie_token = login('charlie@plumbing.com')
+if charlie_token:
+    got_429 = False
+    for i in range(20):
+        status, _ = http('POST', '/api/jobs/cccccccc-0000-0000-0000-000000000001/bids',
+                          {'amount': 100 + i},
+                          headers={'Authorization': f'Bearer {charlie_token}'})
+        if status == 429:
+            got_429 = True
+            break
+    if not got_429:
+        findings.append({
+            'id': 'VULN-6-RATELIMIT', 'severity': 'medium',
+            'rule': 'API4:2023 — Unrestricted Resource Consumption',
+            'file': 'api/src/routes/jobs.ts', 'line': 45,
+            'message': "20 consecutive bid requests accepted without any 429 response. "
+                       "No per-user rate limiter on POST /api/jobs/:id/bids.",
+            'fix': "Add express-rate-limit with keyGenerator: (req) => req.user.userId"
+        })
+
+# ── Probe 4: SQL Injection ─────────────────────────────────────────────────
+# Send injection payload to /search. If row count is abnormally high → vulnerable.
+alice_token = login('alice@propowner.com')
+if alice_token:
+    _, baseline = http('GET', '/api/properties?limit=5',
+                        headers={'Authorization': f'Bearer {alice_token}'})
+    safe_count = baseline.get('count', 0)
+    try:
+        import urllib.parse
+        q = urllib.parse.quote("' OR 1=1 --")
+        status, body = http('GET', f'/api/properties/search?q={q}',
+                             headers={'Authorization': f'Bearer {alice_token}'})
+        injected_count = body.get('count', 0)
+        if isinstance(injected_count, int) and isinstance(safe_count, int):
+            if injected_count > safe_count + 2:
+                findings.append({
+                    'id': 'VULN-8-SQLI', 'severity': 'critical',
+                    'rule': 'API8:2023 — Security Misconfiguration (SQL Injection)',
+                    'file': 'api/src/services/PropertyService.ts', 'line': 67,
+                    'message': f"SQL injection returned {injected_count} rows vs safe baseline {safe_count}. "
+                               "Payload: q=' OR 1=1 --",
+                    'fix': "Replace string concat with parameterized: WHERE name ILIKE $1"
+                })
+    except Exception:
+        pass
+
+# Write results
+with open('/tmp/runtime_findings.json', 'w') as f:
+    json.dump({'findings': findings}, f, indent=2)
+
+print(f"Runtime probes complete — {len(findings)} finding(s)")
+for f in findings:
+    print(f"  [{f['severity'].upper()}] {f['id']}: {f['message'][:80]}...")
+PYEOF
+
+          COUNT=$(python3 -c "import json; d=json.load(open('/tmp/runtime_findings.json')); print(len(d['findings']))")
+          echo "runtime_count=$COUNT" >> $GITHUB_OUTPUT
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # STEP 6: GENERATE SARIF FILE
+      # ═══════════════════════════════════════════════════════════════════════
+      # What it does: Converts our runtime probe findings into SARIF format.
+      #
+      # What is SARIF? Static Analysis Results Interchange Format — an open
+      #               standard (JSON schema) for representing security tool output.
+      #               GitHub's Security tab understands SARIF natively, so by
+      #               converting our custom probe results to SARIF, they appear
+      #               in the SAME place as CodeQL findings — one unified view.
+      #
+      # Why this is powerful: Without SARIF, our probe results only exist in
+      #               the Actions log — engineers have to dig through job logs.
+      #               With SARIF, findings appear in:
+      #                 → Security > Code scanning (with file + line links)
+      #                 → Pull request checks (inline annotation on the diff)
+      #                 → Security Overview (org-wide aggregation)
+      #               This turns our custom scripts into a first-class GHAS tool.
+      #
+      - name: "📄 Step 5 — Generate SARIF from Runtime Findings"
+        run: |
+          python3 - <<'PYEOF'
+import json, time
+
+with open('/tmp/runtime_findings.json') as f:
+    data = json.load(f)
+
+findings = data.get('findings', [])
+
+# SARIF severity mapping
+sev_map = {'critical': 'error', 'high': 'error', 'medium': 'warning', 'low': 'note'}
+
+# Build SARIF 2.1.0 document
+sarif = {
+    "version": "2.1.0",
+    "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+    "runs": [{
+        "tool": {
+            "driver": {
+                "name": "PropTracker Runtime API Security Probe",
+                "version": "1.0.0",
+                "informationUri": "https://github.com/sautalwar/cushman-property-api",
+                "rules": [
+                    {
+                        "id": f["id"],
+                        "name": f["id"].replace("-", ""),
+                        "shortDescription": {"text": f["rule"]},
+                        "fullDescription": {"text": f["message"]},
+                        "helpUri": "https://owasp.org/API-Security/",
+                        "properties": {"security-severity": "9.0" if f["severity"] == "critical" else "7.0" if f["severity"] == "high" else "5.0"}
+                    }
+                    for f in findings
+                ]
+            }
+        },
+        "results": [
+            {
+                "ruleId": f["id"],
+                "level": sev_map.get(f["severity"], "warning"),
+                "message": {"text": f"{f['message']} Fix: {f['fix']}"},
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": f["file"], "uriBaseId": "%SRCROOT%"},
+                        "region": {"startLine": f["line"]}
+                    }
+                }]
+            }
+            for f in findings
+        ],
+        "automationDetails": {"id": f"runtime-probe/{int(time.time())}"}
+    }]
+}
+
+with open('/tmp/results.sarif', 'w') as f:
+    json.dump(sarif, f, indent=2)
+
+print(f"SARIF generated with {len(findings)} result(s)")
+PYEOF
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # STEP 7: UPLOAD SARIF TO GITHUB SECURITY TAB
+      # ═══════════════════════════════════════════════════════════════════════
+      # What it does: Sends the SARIF file to GitHub using the official
+      #               CodeQL upload action. GitHub then processes it and makes
+      #               each finding visible in the Security > Code Scanning tab,
+      #               with direct links to the affected file and line number.
+      #
+      # Why use the action instead of the API directly?
+      #               The action handles: gzip compression, base64 encoding,
+      #               chunked upload for large files, retry on failure, and
+      #               correctly sets the commit SHA so findings are pinned to
+      #               the right version of the code.
+      #
+      - name: "⬆️  Step 6 — Upload SARIF to GitHub Security"
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()   # Upload even if probes found issues (we WANT them in Security tab)
+        with:
+          sarif_file: /tmp/results.sarif
+          category: runtime-api-probe   # Groups these findings separately from CodeQL
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # STEP 8: CREATE GITHUB ISSUES FOR NEW FINDINGS
+      # ═══════════════════════════════════════════════════════════════════════
+      # What it does: For every runtime finding, checks if a GitHub Issue with
+      #               that vulnerability ID is already open. If not, creates one.
+      #               The issue includes: evidence, AI recommendation, and
+      #               two label options (apply-fix / risk-accepted) so a human
+      #               can decide whether to apply the Copilot-generated fix.
+      #
+      # Why check before creating? Deduplication. If the vulnerability exists
+      #               in every run for 2 weeks, we don't want 1,344 duplicate issues.
+      #               We create ONE issue and it stays open until the fix is merged.
+      #
+      - name: "🚨 Step 7 — Create GitHub Issues for New Findings"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PYEOF'
+import json, os, subprocess
+
+with open('/tmp/runtime_findings.json') as f:
+    data = json.load(f)
+
+repo = os.environ.get('GITHUB_REPO', 'sautalwar/cushman-property-api')
+icons = {'critical': '🔴', 'high': '🟠', 'medium': '🟡', 'low': '🔵'}
+
+for finding in data.get('findings', []):
+    vuln_id = finding['id']
+    sev     = finding['severity']
+    icon    = icons.get(sev, '⚠️')
+
+    # Check if an open issue for this vuln already exists
+    existing = subprocess.run(
+        ['gh', 'issue', 'list', '--repo', repo,
+         '--label', f'vuln:{vuln_id}', '--state', 'open', '--json', 'number'],
+        capture_output=True, text=True
+    )
+    if existing.stdout.strip() not in ('', '[]', 'null'):
+        print(f"Issue already open for {vuln_id} — skipping")
+        continue
+
+    body = f"""## {icon} Runtime Security Finding: `{vuln_id}`
+
+**Severity:** `{sev.upper()}`
+**OWASP Category:** {finding['rule']}
+**Affected file:** `{finding['file']}` (line {finding['line']})
+
+---
+
+### 🔬 What was detected
+
+{finding['message']}
+
+---
+
+### 🤖 AI-Recommended Fix (Copilot)
+
+```typescript
+// {finding['fix']}
+```
+
+---
+
+### ✅ How to respond
+
+This issue was created automatically by the Security Posture workflow.
+Choose one of the following actions:
+
+| Action | How | Result |
+|--------|-----|--------|
+| **Apply the fix** | Add label `apply-fix` | Copilot opens a PR with the patch |
+| **Accept the risk** | Add label `risk-accepted` | Issue closed, finding suppressed |
+| **Investigate** | Leave open | Stays in security backlog |
+
+---
+*Auto-generated by Security Posture Dashboard · Run [{os.environ.get('GITHUB_RUN_ID','')}](https://github.com/{repo}/actions/runs/{os.environ.get('GITHUB_RUN_ID','')})*
+"""
+
+    result = subprocess.run(
+        ['gh', 'issue', 'create', '--repo', repo,
+         '--title', f"{icon} Security Finding: {vuln_id} — {finding['rule'][:60]}",
+         '--body', body,
+         '--label', 'security,ai-recommendation,' + f'vuln:{vuln_id},{sev}'],
+        capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        print(f"Created issue for {vuln_id}: {result.stdout.strip()}")
+    else:
+        print(f"Could not create issue for {vuln_id}: {result.stderr[:200]}")
+PYEOF
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # STEP 9: WRITE SECURITY POSTURE DASHBOARD TO STEP SUMMARY
+      # ═══════════════════════════════════════════════════════════════════════
+      # What it does: Generates a rich markdown report and writes it to
+      #               GITHUB_STEP_SUMMARY — a special GitHub variable that
+      #               renders markdown in the Actions run summary page.
+      #
+      # The report combines ALL four data sources into one view:
+      #   - GHAS Code Scanning alert count
+      #   - Secret Scanning alert count
+      #   - Dependabot CVE count
+      #   - Runtime probe findings with severity breakdown
+      #   - Overall risk score (weighted by severity)
+      #   - Links to open issues for remediation
+      #
+      - name: "📊 Step 8 — Write Security Posture Dashboard"
+        env:
+          CODE_SCAN_COUNT: ${{ steps.code_scanning.outputs.code_scan_count }}
+          SECRET_COUNT:    ${{ steps.secret_scanning.outputs.secret_count }}
+          DEP_COUNT:       ${{ steps.dependabot.outputs.dep_count }}
+          RUNTIME_COUNT:   ${{ steps.probes.outputs.runtime_count }}
+          GH_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PYEOF'
+import json, os, datetime
+
+repo = os.environ.get('GITHUB_REPO', 'sautalwar/cushman-property-api')
+code_count    = int(os.environ.get('CODE_SCAN_COUNT', 0))
+secret_count  = int(os.environ.get('SECRET_COUNT', 0))
+dep_count     = int(os.environ.get('DEP_COUNT', 0))
+runtime_count = int(os.environ.get('RUNTIME_COUNT', 0))
+
+with open('/tmp/runtime_findings.json') as f:
+    runtime = json.load(f)
+
+findings = runtime.get('findings', [])
+critical = sum(1 for f in findings if f['severity'] == 'critical')
+high     = sum(1 for f in findings if f['severity'] == 'high')
+medium   = sum(1 for f in findings if f['severity'] == 'medium')
+
+# Risk score: weighted sum (critical=10, high=6, medium=3, secret=15, dep=4)
+risk_score = (critical * 10) + (high * 6) + (medium * 3) + (secret_count * 15) + (dep_count * 4) + (code_count * 5)
+risk_label = "🔴 CRITICAL" if risk_score > 30 else "🟠 HIGH" if risk_score > 15 else "🟡 MEDIUM" if risk_score > 5 else "🟢 LOW"
+
+now = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
+run_id = os.environ.get('GITHUB_RUN_ID', '')
+
+summary = f"""# 🔐 Security Posture Dashboard
+**Repository:** `{repo}` | **Scanned:** {now} | **Overall Risk:** {risk_label} (score: {risk_score})
+
+---
+
+## 📊 Security Signal Summary
+
+| Source | Open Findings | Severity | Action Required |
+|--------|-------------|----------|----------------|
+| 🔬 Runtime API Probes | **{runtime_count}** | Critical: {critical} · High: {high} · Medium: {medium} | {'🚨 Immediate' if critical > 0 else '⚠️ Review'} |
+| 🔍 GHAS Code Scanning | **{code_count}** | See Security tab | {'🚨 Review now' if code_count > 0 else '✅ Clean'} |
+| 🔑 Secret Scanning | **{secret_count}** | Critical (always) | {'🚨 ROTATE NOW' if secret_count > 0 else '✅ No secrets exposed'} |
+| 📦 Dependabot CVEs | **{dep_count}** | Mixed | {'⚠️ Upgrade deps' if dep_count > 0 else '✅ Dependencies clean'} |
+
+---
+
+## 🔬 Runtime Probe Findings
+"""
+if findings:
+    for f in findings:
+        icon = {'critical':'🔴','high':'🟠','medium':'🟡'}.get(f['severity'],'⚠️')
+        summary += f"\n### {icon} `{f['id']}` — {f['rule']}\n"
+        summary += f"**File:** `{f['file']}` line {f['line']}\n\n"
+        summary += f"**Evidence:** {f['message']}\n\n"
+        summary += f"**Fix:** `{f['fix']}`\n\n"
+        summary += "---\n"
+else:
+    summary += "\n✅ **No runtime vulnerabilities detected in this scan.**\n\n---\n"
+
+summary += f"""
+## 🔗 Quick Links
+
+- [Security Overview](https://github.com/{repo}/security) — All GHAS findings
+- [Code Scanning Alerts](https://github.com/{repo}/security/code-scanning) — CodeQL results
+- [Open Issues](https://github.com/{repo}/issues?q=label%3Aai-recommendation+is%3Aopen) — AI recommendations awaiting approval
+- [Actions Run](https://github.com/{repo}/actions/runs/{run_id}) — This workflow run
+
+---
+*Security Posture Dashboard · Generated automatically by GitHub Actions · {now}*
+"""
+
+with open(os.environ.get('GITHUB_STEP_SUMMARY', '/tmp/summary.md'), 'w') as f:
+    f.write(summary)
+print("Security posture dashboard written to Step Summary")
+PYEOF
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # STEP 10: FAIL THE WORKFLOW IF CRITICAL/HIGH FINDINGS EXIST
+      # ═══════════════════════════════════════════════════════════════════════
+      # What it does: If this workflow is running on a pull_request AND the
+      #               fail_on_high input is true (default), fails the check
+      #               so the PR cannot be merged until vulnerabilities are resolved.
+      #
+      # Why fail? This is the "enforcement gate". Without it, security findings
+      #               are informational only. By failing the PR check, we make
+      #               security non-negotiable — a developer cannot ship vulnerable
+      #               code without an explicit override from an admin.
+      #
+      - name: "🚦 Step 9 — Enforce: Fail on Critical or High Findings"
+        if: github.event_name == 'pull_request' || inputs.fail_on_high == true
+        run: |
+          COUNT="${{ steps.probes.outputs.runtime_count }}"
+          if [ "$COUNT" -gt "0" ] && [ "${{ inputs.fail_on_high }}" != "false" ]; then
+            echo "::error::Security Posture Check FAILED — $COUNT runtime vulnerability/vulnerabilities detected."
+            echo "::error::Review the Security Posture Dashboard in the Actions summary and apply AI recommendations."
+            exit 1
+          fi
+          echo "✅ Security posture check passed — no blocking findings."

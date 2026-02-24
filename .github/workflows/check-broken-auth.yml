@@ -1,4 +1,4 @@
-﻿name: "🔴 VULN-2: Broken Authentication Check"
+name: "🔴 VULN-2: Broken Authentication Check"
 
 on:
   schedule:
@@ -29,15 +29,25 @@ jobs:
       - name: Send request with expired token
         id: auth_test
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          STATUS=$(curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer ${{ steps.gen_token.outputs.token }}" \
-            "$API_URL/api/jobs")
+            "$API_URL/api/jobs" 2>/dev/null || echo 'SKIP')
           echo "status=$STATUS" >> $GITHUB_OUTPUT
           echo "HTTP Status with expired token: $STATUS"
 
       - name: Evaluate result
         run: |
           STATUS="${{ steps.auth_test.outputs.status }}"
+
+          if [ "$STATUS" = "SKIP" ] || [ -z "$STATUS" ]; then
+            echo "## ⚠️ API Not Reachable in CI" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The live API at \`${API_URL:-http://localhost:3001}\` was not reachable from the GitHub Actions runner." >> $GITHUB_STEP_SUMMARY
+            echo "**To enable live probing:** Set the \`API_URL\` repository variable (Settings → Variables) to a deployed staging URL." >> $GITHUB_STEP_SUMMARY
+            echo "This check is **informational only** until a live API endpoint is configured." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
           if [ "$STATUS" = "200" ]; then
             echo "::error::VULN-2 CONFIRMED: Broken Authentication! Server accepted an expired JWT and returned HTTP 200. Fix: remove ignoreExpiration: true from jwt.verify()"
             echo "## 🔴 Broken Authentication Detected" >> $GITHUB_STEP_SUMMARY
