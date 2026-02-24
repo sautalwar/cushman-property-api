@@ -3,6 +3,7 @@ import Dashboard from './pages/Dashboard';
 import PropertiesPage from './pages/PropertiesPage';
 import ContractorsPage from './pages/ContractorsPage';
 import JobsPage from './pages/JobsPage';
+import ClarivateDemo from './pages/ClarivateDemo';
 
 const navItems = [
   { path: '/',             label: '🛡️ Dashboard' },
@@ -19,19 +20,24 @@ export default function App() {
         <div className="text-xl font-bold text-blue-400">🏗️ PropTracker</div>
         <div className="flex gap-6">
           {navItems.map(item => (
-            <Link
-              key={item.path}
-              to={item.path}
+            <Link key={item.path} to={item.path}
               className={`text-sm font-medium transition-colors ${
                 location.pathname === item.path
                   ? 'text-blue-400 border-b-2 border-blue-400 pb-1'
                   : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {item.label}
-            </Link>
+              }`}>{item.label}</Link>
           ))}
         </div>
+        {/* Clarivate demo separator */}
+        <div className="w-px h-6 bg-slate-600 mx-2" />
+        <Link to="/clarivate"
+          className={`text-sm font-bold transition-colors flex items-center gap-2 px-3 py-1.5 rounded-lg border ${
+            location.pathname.startsWith('/clarivate')
+              ? 'text-emerald-300 border-emerald-700 bg-emerald-950/40'
+              : 'text-slate-400 border-slate-600 hover:text-emerald-300 hover:border-emerald-700'
+          }`}>
+          ◈ Clarivate Demo
+        </Link>
         <div className="ml-auto text-xs text-slate-500">APIM Security POC — GitHub Actions Demo</div>
       </nav>
       <main className="p-6">
@@ -40,6 +46,7 @@ export default function App() {
           <Route path="/properties"   element={<PropertiesPage />} />
           <Route path="/contractors"  element={<ContractorsPage />} />
           <Route path="/jobs"         element={<JobsPage />} />
+          <Route path="/clarivate"    element={<ClarivateDemo />} />
         </Routes>
       </main>
     </div>
