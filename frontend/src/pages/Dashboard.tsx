@@ -182,6 +182,343 @@ function YamlViewer({ yaml }: { yaml: string }) {
   );
 }
 
+function BolaDiagram() {
+  const [activeRow, setActiveRow] = useState(-1);
+  const [phase, setPhase] = useState<'req' | 'res' | 'idle'>('idle');
+
+  useEffect(() => {
+    let row = 0;
+    let cancelled = false;
+    const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+    const run = async () => {
+      while (!cancelled) {
+        for (row = 0; row < 3 && !cancelled; row++) {
+          setActiveRow(row);
+          setPhase('req');
+          await delay(700);
+          setPhase('res');
+          await delay(700);
+          setPhase('idle');
+          await delay(300);
+        }
+        setActiveRow(-1);
+        await delay(1200);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, []);
+
+  const rows = [
+    {
+      endpoint: 'GET /api/jobs/cccccccc-…0001',
+      resourceLabel: "Bob's Job #1",
+      ownerName: 'BOB',
+      ownerColor: 'text-orange-400',
+      isVuln: false,
+      httpStatus: '200 OK',
+    },
+    {
+      endpoint: 'GET /api/jobs/cccccccc-…0002',
+      resourceLabel: "Bob's Job #2",
+      ownerName: 'BOB',
+      ownerColor: 'text-orange-400',
+      isVuln: false,
+      httpStatus: '200 OK',
+    },
+    {
+      endpoint: 'GET /api/jobs/cccccccc-…0001',
+      resourceLabel: "Alice's Job ⚠️",
+      ownerName: 'ALICE',
+      ownerColor: 'text-blue-400',
+      isVuln: true,
+      httpStatus: '200 OK  ← SHOULD BE 403!',
+    },
+  ];
+
+  return (
+    <div className="bg-slate-900 rounded-xl border border-slate-700 p-5">
+      <div className="flex items-center gap-3 mb-4">
+        <span className="text-2xl">🎬</span>
+        <div>
+          <h3 className="text-base font-bold text-white">BOLA Attack Flow — Live Animation</h3>
+          <p className="text-xs text-slate-400">Bob iterates job IDs. Job #1 belongs to Alice — no ownership check exists.</p>
+        </div>
+      </div>
+
+      {/* Header labels */}
+      <div className="grid grid-cols-[56px_1fr_56px_56px_80px] gap-2 mb-2 px-2">
+        <span className="text-xs text-slate-500 text-center">Attacker</span>
+        <span className="text-xs text-slate-500 text-center">HTTP Traffic</span>
+        <span className="text-xs text-slate-500 text-center">API</span>
+        <span className="text-xs text-slate-500 text-center">Owner</span>
+        <span className="text-xs text-slate-500 text-center">Result</span>
+      </div>
+
+      <div className="space-y-3">
+        {rows.map((row, i) => {
+          const isActive = activeRow === i;
+          const showReq = isActive && (phase === 'req' || phase === 'res' || phase === 'idle');
+          const showRes = isActive && phase === 'res';
+
+          return (
+            <div
+              key={i}
+              className={`grid grid-cols-[56px_1fr_56px_56px_80px] gap-2 items-center p-3 rounded-lg border transition-all duration-300 ${
+                isActive && row.isVuln
+                  ? 'bg-red-950/50 border-red-600 shadow-lg shadow-red-900/30'
+                  : isActive
+                  ? 'bg-blue-950/40 border-blue-700'
+                  : row.isVuln
+                  ? 'bg-red-950/20 border-red-900/50'
+                  : 'bg-slate-800/40 border-slate-700/50'
+              }`}
+            >
+              {/* Attacker (Bob) */}
+              <div className="flex flex-col items-center">
+                <span className={`text-2xl transition-all ${isActive ? 'scale-110' : ''}`}>👤</span>
+                <span className="text-xs font-bold text-orange-400">BOB</span>
+              </div>
+
+              {/* Traffic arrows */}
+              <div className="flex flex-col gap-1 min-h-[40px] justify-center">
+                {/* Request */}
+                <div className={`flex items-center gap-1 transition-opacity duration-300 ${showReq || isActive ? 'opacity-100' : 'opacity-30'}`}>
+                  <span className="text-xs font-mono text-slate-300 truncate">{row.endpoint}</span>
+                  <span className={`text-blue-400 font-bold transition-all duration-500 ${showReq ? 'opacity-100 translate-x-1' : 'opacity-50'}`}>→</span>
+                </div>
+                {/* Response */}
+                <div className={`flex items-center gap-1 transition-all duration-400 ${showRes ? 'opacity-100' : 'opacity-0'}`}>
+                  <span className="text-blue-400 font-bold">←</span>
+                  <span className={`text-xs font-mono font-bold ${row.isVuln ? 'text-red-400' : 'text-green-400'}`}>
+                    {row.httpStatus}
+                  </span>
+                </div>
+              </div>
+
+              {/* API Server */}
+              <div className="flex flex-col items-center">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg border-2 transition-all duration-300 ${
+                  isActive && row.isVuln ? 'border-red-500 bg-red-900/60 shadow-md shadow-red-500/40'
+                  : isActive ? 'border-blue-500 bg-blue-900/60'
+                  : 'border-slate-600 bg-slate-800'
+                }`}>⚙️</div>
+                <span className="text-xs text-slate-500">API</span>
+              </div>
+
+              {/* Resource owner */}
+              <div className="flex flex-col items-center">
+                <span className={`text-2xl transition-all ${isActive && row.isVuln ? 'animate-pulse' : ''}`}>
+                  {row.ownerName === 'ALICE' ? '👤' : '👤'}
+                </span>
+                <span className={`text-xs font-bold ${row.ownerColor}`}>{row.ownerName}</span>
+              </div>
+
+              {/* Result */}
+              <div className="flex flex-col items-center">
+                {row.isVuln ? (
+                  <span className={`text-xl ${isActive ? 'animate-bounce' : ''}`}>🚨</span>
+                ) : (
+                  <span className="text-xl">✅</span>
+                )}
+                {row.isVuln && (
+                  <span className="text-xs font-bold text-red-400 text-center">VULN!</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 flex items-start gap-3 bg-red-950/30 border border-red-800 rounded-lg p-3">
+        <span className="text-xl shrink-0">🔍</span>
+        <div className="text-sm">
+          <span className="font-bold text-red-300">Root cause: </span>
+          <span className="text-slate-300">
+            <code className="text-yellow-300 bg-slate-900 px-1 rounded">JobService.getJobById()</code> runs{' '}
+            <code className="text-red-300 bg-slate-900 px-1 rounded">WHERE id = $1</code> — it never checks{' '}
+            <code className="text-green-300 bg-slate-900 px-1 rounded">AND owner_id = $2</code>.
+            Any token works for any job ID.
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BrokenAuthDiagram() {
+  const [activeRow, setActiveRow] = useState(-1);
+  const [phase, setPhase] = useState<'req' | 'res' | 'idle'>('idle');
+
+  useEffect(() => {
+    let cancelled = false;
+    const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+    const run = async () => {
+      while (!cancelled) {
+        for (let row = 0; row < 3 && !cancelled; row++) {
+          setActiveRow(row);
+          setPhase('req');
+          await delay(800);
+          setPhase('res');
+          await delay(900);
+          setPhase('idle');
+          await delay(400);
+        }
+        setActiveRow(-1);
+        await delay(1500);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, []);
+
+  const rows = [
+    {
+      label: 'Step 1 — Login',
+      bgColor: 'bg-slate-800/40',
+      borderColor: 'border-slate-700/50',
+      activeBg: 'bg-blue-950/40',
+      activeBorder: 'border-blue-700',
+      request: 'email: alice@propowner.com + Password123!',
+      requestColor: 'text-blue-300',
+      response: 'JWT token (exp: now + 1 hour)',
+      responseColor: 'text-green-400',
+      leftIcon: '💻',
+      leftLabel: 'Client',
+      rightIcon: '🗄️',
+      rightLabel: 'Server',
+      actionLabel: 'Validate credentials\ngenerate JWT',
+      actionColor: 'bg-slate-700',
+      isVuln: false,
+    },
+    {
+      label: 'Step 2 — Valid Token Request',
+      bgColor: 'bg-slate-800/40',
+      borderColor: 'border-slate-700/50',
+      activeBg: 'bg-green-950/30',
+      activeBorder: 'border-green-700',
+      request: 'Authorization: Bearer eyJhbGci… (valid)',
+      requestColor: 'text-green-300',
+      response: '200 OK — job data returned ✅',
+      responseColor: 'text-green-400',
+      leftIcon: '💻',
+      leftLabel: 'Client',
+      rightIcon: '🗄️',
+      rightLabel: 'Server',
+      actionLabel: 'Validate JWT token\n✅ accepted',
+      actionColor: 'bg-green-900',
+      isVuln: false,
+    },
+    {
+      label: 'Step 3 — EXPIRED Token (VULNERABLE)',
+      bgColor: 'bg-red-950/20',
+      borderColor: 'border-red-900/50',
+      activeBg: 'bg-red-950/50',
+      activeBorder: 'border-red-600',
+      request: 'Authorization: Bearer eyJhbGci… (exp: 1 hour ago!)',
+      requestColor: 'text-red-300',
+      response: '200 OK — SHOULD BE 401 Unauthorized! ⚠️',
+      responseColor: 'text-red-400',
+      leftIcon: '💻',
+      leftLabel: 'Attacker',
+      rightIcon: '🗄️',
+      rightLabel: 'Server',
+      actionLabel: 'ignoreExpiration:\ntrue  ← VULN-2',
+      actionColor: 'bg-red-900',
+      isVuln: true,
+    },
+  ];
+
+  return (
+    <div className="bg-slate-900 rounded-xl border border-slate-700 p-5">
+      <div className="flex items-center gap-3 mb-4">
+        <span className="text-2xl">🔑</span>
+        <div>
+          <h3 className="text-base font-bold text-white">Broken Authentication — JWT Lifecycle</h3>
+          <p className="text-xs text-slate-400">Stolen or expired tokens are accepted indefinitely due to <code className="text-yellow-300">ignoreExpiration: true</code></p>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {rows.map((row, i) => {
+          const isActive = activeRow === i;
+          const showReq = isActive && (phase === 'req' || phase === 'res');
+          const showRes = isActive && phase === 'res';
+
+          return (
+            <div
+              key={i}
+              className={`p-4 rounded-lg border-2 transition-all duration-300 ${
+                isActive ? `${row.activeBg} ${row.activeBorder} shadow-lg` : `${row.bgColor} ${row.borderColor}`
+              }`}
+            >
+              {/* Row label */}
+              <div className={`text-xs font-bold mb-3 ${row.isVuln ? 'text-red-400' : 'text-slate-400'}`}>
+                {row.label}
+              </div>
+
+              <div className="flex items-center gap-3">
+                {/* Left (Client/Attacker) */}
+                <div className="flex flex-col items-center w-16 shrink-0">
+                  <span className={`text-3xl transition-all ${isActive ? 'scale-110' : ''}`}>{row.leftIcon}</span>
+                  <span className={`text-xs font-bold mt-1 ${row.isVuln ? 'text-red-400' : 'text-slate-400'}`}>{row.leftLabel}</span>
+                </div>
+
+                {/* Flow arrows */}
+                <div className="flex-1 flex flex-col gap-2">
+                  {/* Request */}
+                  <div className={`flex items-center gap-2 transition-all duration-400 ${showReq ? 'opacity-100' : 'opacity-30'}`}>
+                    <span className={`text-xs font-mono flex-1 ${row.requestColor}`}>{row.request}</span>
+                    <span className={`text-lg font-bold text-blue-400 transition-transform duration-300 ${showReq ? 'translate-x-1' : ''}`}>→</span>
+                  </div>
+                  {/* Response */}
+                  <div className={`flex items-center gap-2 transition-all duration-400 ${showRes ? 'opacity-100' : 'opacity-0'}`}>
+                    <span className="text-lg font-bold text-blue-400">←</span>
+                    <span className={`text-xs font-mono font-bold flex-1 ${row.responseColor}`}>{row.response}</span>
+                  </div>
+                </div>
+
+                {/* Right (Server) */}
+                <div className="flex flex-col items-center w-16 shrink-0">
+                  <span className={`text-3xl transition-all ${isActive && row.isVuln ? 'animate-pulse' : ''}`}>{row.rightIcon}</span>
+                  <span className="text-xs font-bold text-slate-400 mt-1">{row.rightLabel}</span>
+                </div>
+
+                {/* Action box (right side) */}
+                <div className={`w-36 shrink-0 rounded-lg px-3 py-2 text-center transition-all duration-300 ${row.actionColor} ${isActive ? 'opacity-100 scale-100' : 'opacity-60 scale-95'}`}>
+                  <p className="text-xs font-bold text-white whitespace-pre-line leading-tight">{row.actionLabel}</p>
+                </div>
+              </div>
+
+              {/* Vuln badge */}
+              {row.isVuln && isActive && (
+                <div className="mt-3 flex items-center gap-2 bg-red-900/40 border border-red-700 rounded p-2">
+                  <span className="animate-pulse text-lg">🚨</span>
+                  <span className="text-xs text-red-300 font-semibold">
+                    Expired token accepted! <code className="bg-slate-900 px-1 rounded">ignoreExpiration: true</code> in <code className="bg-slate-900 px-1 rounded">middleware/auth.ts</code>
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 flex items-start gap-3 bg-red-950/30 border border-red-800 rounded-lg p-3">
+        <span className="text-xl shrink-0">🔍</span>
+        <div className="text-sm">
+          <span className="font-bold text-red-300">Root cause: </span>
+          <span className="text-slate-300">
+            <code className="text-yellow-300 bg-slate-900 px-1 rounded">jwt.verify(token, secret, {'{ ignoreExpiration: true }'})</code>
+            {' '}in <code className="text-red-300 bg-slate-900 px-1 rounded">middleware/auth.ts</code>.{' '}
+            Remove <code className="text-green-300 bg-slate-900 px-1 rounded">ignoreExpiration: true</code> to enforce token expiry.
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [results, setResults]     = useState<Record<number, ExploitResult>>({});
   const [loading, setLoading]     = useState<Record<number, boolean>>({});
@@ -349,6 +686,10 @@ export default function Dashboard() {
               <h3 className="text-xl font-bold text-white mb-3">🎯 What This Vulnerability Does</h3>
               <p className="text-slate-200 text-lg leading-relaxed">{selectedVuln.narrative}</p>
             </div>
+
+            {/* Animated attack diagram — shown for VULN-1 and VULN-2 */}
+            {selectedVuln.id === 1 && <BolaDiagram />}
+            {selectedVuln.id === 2 && <BrokenAuthDiagram />}
 
             {/* How GitHub Actions catches it */}
             <div className="bg-slate-900 rounded-xl border border-indigo-800 p-6">
