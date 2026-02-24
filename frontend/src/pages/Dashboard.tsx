@@ -519,6 +519,334 @@ function BrokenAuthDiagram() {
   );
 }
 
+const CLARIVATE_GUARDRAILS = [
+  {
+    icon: '🔒',
+    color: 'text-green-400',
+    title: 'Sandboxed Codespace',
+    desc: 'Restricted internet access, read-only repo — defined in .devcontainer/devcontainer.json',
+  },
+  {
+    icon: '🌿',
+    color: 'text-purple-400',
+    title: 'copilot/ branches only',
+    desc: 'Subject to all Clarivate branch protections — cannot push directly to main',
+  },
+  {
+    icon: '👁️',
+    color: 'text-yellow-400',
+    title: 'Draft PRs require human approval',
+    desc: 'No CI/CD workflows run until a Clarivate engineer approves the Draft PR',
+  },
+  {
+    icon: '📋',
+    color: 'text-blue-400',
+    title: 'Full audit trail',
+    desc: 'Every step visible in commit history and Codespace session logs',
+  },
+];
+
+const PIPELINE_STEPS = [
+  { id: 1, icon: '📋', label: 'Assign Issue\nto Copilot' },
+  { id: 2, icon: '⚙️', label: 'Agent Spins Up\nSandbox Env' },
+  { id: 3, icon: '</>', label: 'Writes Code &\nPushes Commits' },
+  { id: 4, icon: '🔀', label: 'Draft PR Created\nfor Review' },
+  { id: 5, icon: '✅', label: 'Human Approves\n& Merges' },
+];
+
+function CopilotAgentPanel({ vulnTitle, fixSuggestion }: { vulnTitle: string; fixSuggestion: string }) {
+  type AgentPhase = 'idle' | 'assigning' | 'assigned' | 'sandbox' | 'coding' | 'pr_ready' | 'done';
+  const [phase, setPhase] = useState<AgentPhase>('idle');
+  const [issueUrl, setIssueUrl] = useState<string | null>(null);
+  const [commits, setCommits] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+  const activeStep =
+    phase === 'idle' ? 0
+    : phase === 'assigning' ? 1
+    : phase === 'assigned' ? 1
+    : phase === 'sandbox' ? 2
+    : phase === 'coding' ? 3
+    : phase === 'pr_ready' ? 4
+    : phase === 'done' ? 5
+    : 0;
+
+  const assignToCopilot = async () => {
+    setPhase('assigning');
+    setError(null);
+    setCommits([]);
+    setIssueUrl(null);
+
+    try {
+      const res = await fetch('/api/recommendations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: `[SECURITY] Fix VULN-1: ${vulnTitle}`,
+          body: `## 🔐 Security Vulnerability Detected\n\n**VULN-1 — Broken Object Level Authorization (BOLA)**\n\n### What's happening\nBob can fetch Alice's private job records by guessing job IDs. \`JobService.getJobById()\` filters only on \`id\` — never on \`owner_id\`.\n\n### Fix Required\n${fixSuggestion}\n\n### File to change\n\`api/src/services/JobService.ts\` — \`getJobById()\` method\n\n---\n*Assigned to Copilot Agent for automated remediation — Clarivate Engineering*`,
+          labels: ['security', 'vuln-1-bola'],
+        }),
+      });
+      const data = await res.json();
+      if (data.url) setIssueUrl(data.url);
+    } catch (_) {
+      // Continue with simulation even if real issue creation fails
+      setIssueUrl(`https://github.com/${GITHUB_REPO}/issues`);
+    }
+
+    setPhase('assigned');
+    await delay(1800);
+
+    setPhase('sandbox');
+    await delay(3000);
+
+    setPhase('coding');
+    // Simulate commits appearing one at a time
+    const simulatedCommits = [
+      'fix(jobs): add owner_id check to getJobById query',
+      'test(jobs): add ownership enforcement test cases',
+      'docs: update SECURITY.md with BOLA fix notes',
+    ];
+    for (const msg of simulatedCommits) {
+      await delay(1400);
+      setCommits(c => [...c, msg]);
+    }
+
+    await delay(1000);
+    setPhase('pr_ready');
+  };
+
+  return (
+    <div className="bg-slate-900 rounded-xl border border-purple-800/60 overflow-hidden">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-purple-950/60 to-slate-900 px-6 py-5 border-b border-purple-800/40">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h3 className="text-xl font-black text-white flex items-center gap-3">
+              🤖 Copilot Coding Agent
+              <span className="text-xs font-normal bg-purple-700/60 text-purple-200 px-3 py-1 rounded-full border border-purple-600">
+                Clarivate Engineering
+              </span>
+            </h3>
+            <p className="text-slate-400 text-sm mt-1">Your asynchronous AI teammate — works through PRs, never bypasses controls</p>
+          </div>
+          {phase === 'idle' && (
+            <button
+              onClick={assignToCopilot}
+              className="flex items-center gap-2 bg-purple-700 hover:bg-purple-600 text-white font-bold px-5 py-3 rounded-xl transition-colors shadow-lg shadow-purple-900/50 text-sm shrink-0"
+            >
+              🤖 Assign Fix to Copilot Agent
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="p-6 space-y-6">
+
+        {/* ── 5-Step Pipeline ── */}
+        <div>
+          <div className="flex items-center justify-between gap-0">
+            {PIPELINE_STEPS.map((s, i) => {
+              const isDone = activeStep > s.id;
+              const isActive = activeStep === s.id;
+              const isPending = activeStep < s.id;
+              return (
+                <div key={s.id} className="flex items-center flex-1">
+                  <div className="flex flex-col items-center flex-1 min-w-0">
+                    <div className={`w-14 h-14 rounded-xl flex items-center justify-center text-2xl border-2 transition-all duration-500 ${
+                      isDone ? 'bg-green-900/60 border-green-500 shadow-md shadow-green-900/40'
+                      : isActive ? 'bg-purple-900/60 border-purple-400 shadow-md shadow-purple-900/50 animate-pulse'
+                      : 'bg-slate-800 border-slate-600 opacity-40'
+                    }`}>
+                      {s.icon === '</>' ? <span className="text-lg font-mono font-black text-blue-300">&lt;/&gt;</span> : s.icon}
+                    </div>
+                    {isDone && <span className="text-xs text-green-400 font-bold mt-1">✓ Done</span>}
+                    {isActive && <span className="text-xs text-purple-300 font-bold mt-1 animate-pulse">● Active</span>}
+                    {isPending && <span className="text-xs text-slate-600 mt-1">○ Pending</span>}
+                    <span className={`text-xs text-center mt-1 whitespace-pre-line leading-tight ${
+                      isDone ? 'text-green-300' : isActive ? 'text-purple-200' : 'text-slate-500'
+                    }`}>{s.label}</span>
+                  </div>
+                  {i < PIPELINE_STEPS.length - 1 && (
+                    <div className={`h-0.5 w-6 mx-1 shrink-0 transition-all duration-500 ${
+                      activeStep > s.id ? 'bg-green-500' : 'bg-slate-700'
+                    }`} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ── Phase-specific detail cards ── */}
+
+        {/* Step 1 done: Issue created */}
+        {(phase === 'assigned' || phase === 'sandbox' || phase === 'coding' || phase === 'pr_ready' || phase === 'done') && (
+          <div className="bg-slate-800/60 rounded-xl border border-slate-700 p-4 flex items-center gap-4">
+            <span className="text-2xl">📋</span>
+            <div className="flex-1">
+              <div className="font-bold text-white text-sm">GitHub Issue Created & Assigned to @copilot</div>
+              <div className="text-xs text-slate-400 mt-0.5 font-mono">[SECURITY] Fix VULN-1: {vulnTitle}</div>
+            </div>
+            {issueUrl && (
+              <a href={issueUrl} target="_blank" rel="noopener noreferrer"
+                className="no-underline text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-1.5 rounded-lg transition-colors font-semibold shrink-0">
+                View Issue →
+              </a>
+            )}
+            <span className="text-green-400 text-xl shrink-0">✅</span>
+          </div>
+        )}
+
+        {/* Step 2: Codespace / Sandbox */}
+        {(phase === 'sandbox' || phase === 'coding' || phase === 'pr_ready' || phase === 'done') && (
+          <div className="bg-slate-950 rounded-xl border border-purple-800/50 p-4">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-3 h-3 rounded-full bg-green-400 animate-pulse" />
+              <span className="font-bold text-white text-sm">Codespace — Sandbox Environment Active</span>
+              <span className="text-xs bg-green-900/40 text-green-300 border border-green-800 px-2 py-0.5 rounded-full">Running</span>
+            </div>
+            <div className="font-mono text-xs text-green-300 space-y-1 mb-3">
+              <div><span className="text-slate-500">$</span> gh codespace create --repo {GITHUB_REPO}</div>
+              <div><span className="text-slate-500">$</span> git checkout -b copilot/fix-vuln-1-bola</div>
+              <div><span className="text-slate-500">$</span> <span className="text-purple-300">copilot-agent</span> analyze --file api/src/services/JobService.ts</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              {[
+                { label: 'Network', value: 'Restricted ✓', color: 'text-green-400' },
+                { label: 'Branch', value: 'copilot/ only ✓', color: 'text-green-400' },
+                { label: 'Repo access', value: 'Read-only ✓', color: 'text-green-400' },
+                { label: 'Audit logs', value: 'Enabled ✓', color: 'text-green-400' },
+              ].map(c => (
+                <div key={c.label} className="bg-slate-900 rounded-lg px-3 py-2 flex justify-between items-center">
+                  <span className="text-xs text-slate-400">{c.label}</span>
+                  <span className={`text-xs font-bold ${c.color}`}>{c.value}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 text-xs text-slate-500 flex items-center gap-2">
+              <span>📄</span>
+              <span>Constraints defined in <code className="text-yellow-300">.devcontainer/devcontainer.json</code></span>
+              <a href={`https://github.com/${GITHUB_REPO}/blob/main/.devcontainer/devcontainer.json`}
+                target="_blank" rel="noopener noreferrer"
+                className="no-underline text-blue-400 hover:text-blue-300 transition-colors">View config →</a>
+            </div>
+          </div>
+        )}
+
+        {/* Step 3: Commits */}
+        {(phase === 'coding' || phase === 'pr_ready' || phase === 'done') && commits.length > 0 && (
+          <div className="bg-slate-900/70 rounded-xl border border-slate-700 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-base">🌿</span>
+              <span className="font-bold text-white text-sm">Commits pushed to <code className="text-purple-300 bg-slate-800 px-1.5 rounded">copilot/fix-vuln-1-bola</code></span>
+            </div>
+            <div className="space-y-2">
+              {commits.map((msg, i) => (
+                <div key={i} className="flex items-start gap-3 p-2 bg-slate-800/60 rounded-lg border border-slate-700">
+                  <code className="text-xs text-yellow-300 font-mono shrink-0 bg-slate-950 px-1.5 py-0.5 rounded">
+                    {['a1b2c3d', 'e4f5g6h', 'i7j8k9l'][i]}
+                  </code>
+                  <span className="text-xs text-slate-300">{msg}</span>
+                  <span className="text-green-400 text-sm ml-auto shrink-0">✓</span>
+                </div>
+              ))}
+              {phase === 'coding' && (
+                <div className="flex items-center gap-2 p-2">
+                  <span className="text-xs text-slate-500 animate-pulse">Copilot is writing...</span>
+                  <span className="animate-spin text-purple-400">⟳</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Step 4: Draft PR ready */}
+        {(phase === 'pr_ready' || phase === 'done') && (
+          <div className="bg-gradient-to-r from-purple-950/40 to-slate-900 rounded-xl border-2 border-purple-700 p-5">
+            <div className="flex items-start gap-4">
+              <div className="text-4xl shrink-0">🔀</div>
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-2 flex-wrap">
+                  <span className="font-black text-white">Draft PR Created by Copilot Agent</span>
+                  <span className="text-xs bg-yellow-700/50 text-yellow-200 border border-yellow-700 px-2 py-0.5 rounded-full font-bold">DRAFT</span>
+                  <span className="text-xs bg-purple-700/50 text-purple-200 border border-purple-700 px-2 py-0.5 rounded-full">Awaiting Clarivate Review</span>
+                </div>
+                <div className="text-sm text-slate-300 font-mono mb-3">
+                  fix(VULN-1): add owner_id ownership check to getJobById — resolves BOLA
+                </div>
+                <div className="flex items-center gap-3 text-xs text-slate-400 mb-4">
+                  <span>3 commits</span>
+                  <span>•</span>
+                  <span>1 file changed</span>
+                  <span>•</span>
+                  <span className="text-green-400">+1 line</span>
+                  <span className="text-red-400">-0 lines</span>
+                </div>
+                <div className="flex gap-3 flex-wrap">
+                  <a
+                    href={`https://github.com/${GITHUB_REPO}/pulls`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="no-underline flex items-center gap-2 bg-purple-700 hover:bg-purple-600 text-white font-bold px-4 py-2.5 rounded-xl text-sm transition-colors"
+                  >
+                    🔍 Review Draft PR on GitHub
+                  </a>
+                  <button
+                    onClick={() => setPhase('done')}
+                    className="flex items-center gap-2 bg-green-700 hover:bg-green-600 text-white font-bold px-4 py-2.5 rounded-xl text-sm transition-colors"
+                  >
+                    ✅ Approve & Merge
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Step 5: Merged! */}
+        {phase === 'done' && (
+          <div className="bg-green-950/40 rounded-xl border-2 border-green-600 p-5 flex items-center gap-4">
+            <span className="text-4xl">🎉</span>
+            <div>
+              <div className="font-black text-green-300 text-lg">PR Merged — VULN-1 Fixed!</div>
+              <div className="text-slate-300 text-sm mt-1">
+                Copilot Agent autonomously fixed the BOLA vulnerability. CI/CD pipeline will re-run <code className="text-yellow-300 bg-slate-900 px-1 rounded">check-bola.yml</code> and confirm the fix.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="bg-red-950/40 border border-red-700 rounded-xl p-3 text-sm text-red-300">
+            ⚠️ {error}
+          </div>
+        )}
+
+        {/* ── Guardrails panel ── */}
+        <div className="border-t border-slate-700 pt-5">
+          <h4 className="text-base font-bold text-white mb-4 flex items-center gap-2">
+            🛡️ Built-In Guardrails for Clarivate
+          </h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {CLARIVATE_GUARDRAILS.map(g => (
+              <div key={g.title} className="flex items-start gap-3 bg-slate-800/40 rounded-xl p-4 border border-slate-700">
+                <span className={`text-2xl shrink-0 ${g.color}`}>{g.icon}</span>
+                <div>
+                  <div className="font-bold text-white text-sm">{g.title}</div>
+                  <div className="text-xs text-slate-400 mt-0.5">{g.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [results, setResults]     = useState<Record<number, ExploitResult>>({});
   const [loading, setLoading]     = useState<Record<number, boolean>>({});
@@ -571,7 +899,7 @@ export default function Dashboard() {
               🛡️ API Security Dashboard
             </h1>
             <p className="text-slate-400 text-xl leading-relaxed max-w-2xl">
-              Live demo of <span className="text-blue-400 font-semibold">10 OWASP API Security Top 10</span> vulnerabilities — detected automatically by GitHub Actions and fixed with Copilot AI.
+              Live demo of <span className="text-blue-400 font-semibold">10 OWASP API Security Top 10</span> vulnerabilities — detected automatically by GitHub Actions and fixed with <span className="text-purple-400 font-semibold">Copilot Coding Agent</span> for <span className="text-blue-300 font-semibold">Clarivate Engineering</span>.
             </p>
           </div>
           <a
@@ -690,6 +1018,14 @@ export default function Dashboard() {
             {/* Animated attack diagram — shown for VULN-1 and VULN-2 */}
             {selectedVuln.id === 1 && <BolaDiagram />}
             {selectedVuln.id === 2 && <BrokenAuthDiagram />}
+
+            {/* Copilot Agent pipeline — shown for VULN-1 */}
+            {selectedVuln.id === 1 && (
+              <CopilotAgentPanel
+                vulnTitle={selectedVuln.category}
+                fixSuggestion={selectedVuln.fix}
+              />
+            )}
 
             {/* How GitHub Actions catches it */}
             <div className="bg-slate-900 rounded-xl border border-indigo-800 p-6">
@@ -817,7 +1153,7 @@ export default function Dashboard() {
           {[
             { icon: '🔁', title: 'Continuous Monitoring', desc: '10 GitHub Actions workflows run on every push and pull request, sending crafted HTTP requests that probe each vulnerability against the live API.' },
             { icon: '🚨', title: 'Automatic Detection', desc: 'Each workflow analyzes status codes, response payloads, and headers — creating a GitHub Issue with full evidence when a vulnerability is confirmed.' },
-            { icon: '🤖', title: 'Copilot Autofix', desc: 'GitHub Copilot analyzes the flagged code and generates an exact fix — turning "vulnerability detected" into a pull request with the corrected code.' },
+            { icon: '🤖', title: 'Copilot Autofix', desc: 'Copilot Coding Agent spins up a sandboxed Codespace for Clarivate, writes the fix, and opens a Draft PR — never bypassing branch protections or CI/CD controls.' },
           ].map(item => (
             <div key={item.title} className="flex gap-5">
               <div className="text-4xl mt-1">{item.icon}</div>

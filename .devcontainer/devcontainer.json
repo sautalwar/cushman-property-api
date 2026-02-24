@@ -1,0 +1,39 @@
+{
+  "name": "PropTracker Security Fix — Clarivate Engineering",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-20",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "20" },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "github.copilot",
+        "github.copilot-chat",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    },
+    "codespaces": {
+      "openFiles": ["api/src/services/JobService.ts"]
+    }
+  },
+  "containerEnv": {
+    "NODE_ENV": "development",
+    "CLARIVATE_SANDBOX": "true",
+    "COPILOT_AGENT": "true"
+  },
+  "postCreateCommand": "cd api && npm install",
+  "remoteUser": "node",
+  "_clarivateGuardrails": {
+    "networkAccess": "restricted",
+    "repoAccess": "read-only-except-copilot-branches",
+    "allowedBranchPrefix": "copilot/",
+    "draftPRRequired": true,
+    "auditLogs": "enabled",
+    "description": "Clarivate Engineering sandbox — Copilot Agent operates within these constraints"
+  }
+}
