@@ -18,16 +18,19 @@ export default function App() {
     <div className="min-h-screen bg-slate-900">
       <nav className="bg-slate-800 border-b border-slate-700 px-6 py-3 flex items-center gap-8">
         <div className="text-xl font-bold text-blue-400">🏗️ PropTracker</div>
-        <div className="flex gap-6">
-          {navItems.map(item => (
-            <Link key={item.path} to={item.path}
-              className={`text-sm font-medium transition-colors ${
-                location.pathname === item.path
-                  ? 'text-blue-400 border-b-2 border-blue-400 pb-1'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}>{item.label}</Link>
-          ))}
-        </div>
+        {/* Hide Cushman tabs when on Clarivate demo */}
+        {!location.pathname.startsWith('/clarivate') && (
+          <div className="flex gap-6">
+            {navItems.map(item => (
+              <Link key={item.path} to={item.path}
+                className={`text-sm font-medium transition-colors ${
+                  location.pathname === item.path
+                    ? 'text-blue-400 border-b-2 border-blue-400 pb-1'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}>{item.label}</Link>
+            ))}
+          </div>
+        )}
         {/* Clarivate demo separator */}
         <div className="w-px h-6 bg-slate-600 mx-2" />
         <Link to="/clarivate"

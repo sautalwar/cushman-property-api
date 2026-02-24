@@ -261,7 +261,11 @@ function CopilotPipeline({ vulnTag, vulnTitle, fixSuggestion }: { vulnTag: strin
           <div className="bg-slate-950 rounded-xl border border-purple-900/40 p-4">
             <div className="flex items-center gap-2 mb-3">
               <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="font-bold text-white text-sm">Codespace Sandbox — Active</span>
+              <a
+                href={`https://github.com/codespaces?repository_id=${GITHUB_REPO}`}
+                target="_blank" rel="noopener noreferrer"
+                className="font-bold text-white text-sm hover:text-emerald-300 transition-colors underline decoration-emerald-700 underline-offset-2"
+              >Codespace Sandbox — Active ↗</a>
               <span className="text-xs bg-emerald-900/40 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded-full ml-1">Running</span>
             </div>
             <div className="font-mono text-xs text-emerald-300 space-y-1 mb-3">
@@ -598,7 +602,37 @@ export default function ClarivateDemo() {
 
       {/* ── Footer ── */}
       <div className="rounded-2xl border border-slate-800 p-8" style={{ background: '#0d1424' }}>
-        <h2 className="text-xl font-bold text-white mb-6">⚡ Always-On Posture — security-posture.yml</h2>
+        <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
+          <h2 className="text-xl font-bold text-white">⚡ Always-On Posture — security-posture.yml</h2>
+          {/* Quick links to GHAS features */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <a href={`https://github.com/${GITHUB_REPO}/security`}
+              target="_blank" rel="noopener noreferrer"
+              className="no-underline flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-emerald-700 text-slate-200 hover:text-emerald-300 text-xs font-bold px-3 py-2 rounded-lg transition-colors">
+              🛡️ GHAS Overview
+            </a>
+            <a href={`https://github.com/${GITHUB_REPO}/security/code-scanning`}
+              target="_blank" rel="noopener noreferrer"
+              className="no-underline flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-blue-700 text-slate-200 hover:text-blue-300 text-xs font-bold px-3 py-2 rounded-lg transition-colors">
+              🔬 CodeQL Alerts
+            </a>
+            <a href={`https://github.com/${GITHUB_REPO}/security/secret-scanning`}
+              target="_blank" rel="noopener noreferrer"
+              className="no-underline flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-yellow-700 text-slate-200 hover:text-yellow-300 text-xs font-bold px-3 py-2 rounded-lg transition-colors">
+              🔑 Secret Scanning
+            </a>
+            <a href={`https://github.com/${GITHUB_REPO}/security/dependabot`}
+              target="_blank" rel="noopener noreferrer"
+              className="no-underline flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-orange-700 text-slate-200 hover:text-orange-300 text-xs font-bold px-3 py-2 rounded-lg transition-colors">
+              📦 Dependabot
+            </a>
+            <a href={`https://github.com/${GITHUB_REPO}/actions/workflows/security-posture.yml`}
+              target="_blank" rel="noopener noreferrer"
+              className="no-underline flex items-center gap-2 bg-emerald-900/40 hover:bg-emerald-800/60 border border-emerald-700 text-emerald-300 text-xs font-bold px-3 py-2 rounded-lg transition-colors">
+              ⚙️ Posture Workflow
+            </a>
+          </div>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           {[
             { icon: '🔁', title: 'Continuous Monitoring', desc: '10 workflows run on every push. security-posture.yml runs every 15 minutes — no human polling required.' },
