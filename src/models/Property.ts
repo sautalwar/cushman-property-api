@@ -15,6 +15,10 @@ export interface Property {
   updatedAt: Date;
 }
 
+export interface NearbyPropertyResult extends Property {
+  distanceMiles: number;
+}
+
 export interface CreatePropertyDto {
   name: string;
   address: string;
