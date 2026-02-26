@@ -7,6 +7,7 @@ import { tenantRouter } from './routes/tenants';
 import { authRouter } from './routes/auth';
 import { errorHandler } from './middleware/errorHandler';
 import { authMiddleware } from './middleware/auth';
+import { authRateLimiter, apiRateLimiter } from './middleware/rateLimiter';
 
 dotenv.config();
 
@@ -19,11 +20,11 @@ app.use(cors());
 app.use(express.json());
 
 // Public routes
-app.use('/api/auth', authRouter);
+app.use('/api/auth', authRateLimiter, authRouter);
 
 // Protected routes
-app.use('/api/properties', authMiddleware, propertyRouter);
-app.use('/api/tenants', authMiddleware, tenantRouter);
+app.use('/api/properties', apiRateLimiter, authMiddleware, propertyRouter);
+app.use('/api/tenants', apiRateLimiter, authMiddleware, tenantRouter);
 
 // Health check
 app.get('/health', (_req, res) => {
